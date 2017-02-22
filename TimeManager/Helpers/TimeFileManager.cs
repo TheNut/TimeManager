@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Security.Principal;
 using TimeManager.Models;
 
@@ -31,8 +32,62 @@ namespace TimeManager.Helpers
         private static string _configFileName = "TimeTrackerConfig.txt";
         private static StorageLocation _storageLocationType = StorageLocation.TempFolder;
         private static string _storageFileName = "TimeTracker.txt";
-        private static string _azureTableComputer = "TimeTrackerComputer";
-        private static string _azureTableLog = "TimeTrackerLog";
+
+        public static string AzureConnectionString = string.Empty;
+        public static string AzureTableNameComputer = "TimeTrackerComputer";
+        public static string AzureTableNameLog = "TimeTrackerLog";
+        private static bool _useAzure = false;
+        private static CloudTable _azureTableComputer = null;
+        private static CloudTable _azureTableLog = null;
+
+        /// <summary>Extract the Configuration settings and turn on azure if they are valid</summary>
+        /// <param name="config"></param>
+        public static void ExtractConfig(ConfigurationModel config)
+        {
+            if (!string.IsNullOrWhiteSpace(config.AzureStorageAccountName) &&
+                !string.IsNullOrWhiteSpace(config.AzureStorageAccountKey)
+                )
+            {
+                /* save the values from the config file */
+
+                //Save the values for azure in the storage file manager
+                AzureConnectionString = string.Format("DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1}",
+                    config.AzureStorageAccountName.Trim(),
+                    config.AzureStorageAccountKey.Trim()
+                    );
+                AzureTableNameComputer = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
+                    ? "TimeTrackerComputer"
+                    : config.AzureStorageTableNameComputer;
+
+                AzureTableNameLog = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
+                    ? "TimeTrackerLog"
+                    : config.AzureStorageTableNameLog;
+
+                /* Test validity of azure storage tables */
+
+                //Extract the values and setup the connection objects
+                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureConnectionString);
+                CloudTableClient tableClient = storageAccount.CreateCloudTableClient();
+                _azureTableComputer = tableClient.GetTableReference(AzureTableNameComputer);
+                _azureTableLog = tableClient.GetTableReference(AzureTableNameLog);
+                //Test the table connection
+                try
+                {   //Test by getting a simple command
+                    _azureTableComputer.GetPermissions();
+                    _azureTableLog.GetPermissions();
+                    _useAzure = true;
+                }
+                catch (Exception ex)
+                {   //No connection or table does not exist
+                    _azureTableComputer = null;
+                    _azureTableLog = null;
+                    _useAzure = false;
+                }
+            }
+            else
+                _useAzure = false;            
+        }
+
 
         #endregion
 
@@ -55,12 +110,13 @@ namespace TimeManager.Helpers
         /// <returns></returns>
         public static ConfigurationModel ReadConfig()
         {
+            ConfigurationModel returnValue;
             try
             {
                 if (!File.Exists(GetConfigPathAndFileName()))
                     WriteConfig(new ConfigurationModel());
 
-                return JsonConvert.DeserializeObject<ConfigurationModel>(File.ReadAllText(GetConfigPathAndFileName()), new JsonSerializerSettings() { MissingMemberHandling = MissingMemberHandling.Error });
+                returnValue = JsonConvert.DeserializeObject<ConfigurationModel>(File.ReadAllText(GetConfigPathAndFileName()), new JsonSerializerSettings() { MissingMemberHandling = MissingMemberHandling.Error });
             }
             catch (Exception)
             {
@@ -76,8 +132,13 @@ namespace TimeManager.Helpers
                     WriteConfig(new ConfigurationModel());
                 }
                 //Return the fixed config file
-                return temp;
+                returnValue = temp;
             }
+
+            //Extract the config values that pertain to storage and azure connectivity
+            ExtractConfig(returnValue);
+
+            return returnValue;
         }
 
         /// <summary>Log an entry into the log file for the logged in user.
@@ -105,13 +166,21 @@ namespace TimeManager.Helpers
         public static void Write(List<string> logEntries, string userLoginName)
         {
             try
-            {   //The template of the entry in the log file
-                string entryTemplate = "{0} - ({1:yyyy-MM-dd HH:mm:ss}) - {2}";
+            {
+                if (_useAzure)
+                {
 
-                //Prepend the userLoginName to each log line
-                logEntries = logEntries.Select(entry => string.Format(entryTemplate, userLoginName, DateTime.Now, entry)).ToList();
-                //Append the log lines to the file
-                File.AppendAllLines(GetPathAndFileName(), logEntries);
+                }
+                else
+                {
+                    //The template of the entry in the log file
+                    string entryTemplate = "{0} - ({1:yyyy-MM-dd HH:mm:ss}) - {2}";
+
+                    //Prepend the userLoginName to each log line
+                    logEntries = logEntries.Select(entry => string.Format(entryTemplate, userLoginName, DateTime.Now, entry)).ToList();
+                    //Append the log lines to the file
+                    File.AppendAllLines(GetPathAndFileName(), logEntries);
+                }
             }
             catch (Exception)
             {
@@ -186,26 +255,6 @@ namespace TimeManager.Helpers
 
         #region Helper Methods
 
-        public static void AzureComputerLog()
-        {
-            ConfigurationModel config = ReadConfig();
-            string connectionString = string.Format("DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1}",
-                                                    config.AzureTableStorageName, 
-                                                    config.AzureTableStorageKey);
-            // Parse the connection string and return a reference to the storage account.
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(CloudConfigurationManager.GetSetting(connectionString));
-
-            // Create the table client.
-            CloudTableClient tableClient = storageAccount.CreateCloudTableClient();
-
-            // Retrieve a reference to the table.
-            CloudTable table = tableClient.GetTableReference("people");
-
-            // Create the table if it doesn't exist.
-            table.CreateIfNotExists();
-
-        }
-
         /// <summary>Get the current login user</summary>
         public static string GetLoginUserName()
         {
@@ -279,5 +328,10 @@ namespace TimeManager.Helpers
         public static string GetConfigPathAndFileName() { return Path.Combine(GetConfigPath(), GetConfigFileName()); }
 
         #endregion Helper Methods
+    }
+
+    public class AzureLogEntry : TableEntity
+    {
+        //public AzureLogEntry(string userLoginName,)
     }
 }

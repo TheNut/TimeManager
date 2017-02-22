@@ -90,7 +90,7 @@ namespace TimeManager
             notifyIcon = new NotifyIcon(components)
             {
                 ContextMenuStrip = new ContextMenuStrip(),
-                Icon = new Icon(IconFileName),
+                Icon = Properties.Resources.CalendarClock_128x128, //new Icon(IconFileName),
                 Text = DefaultTooltip,
                 Visible = true
             };
