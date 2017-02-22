@@ -40,55 +40,6 @@ namespace TimeManager.Helpers
         private static CloudTable _azureTableComputer = null;
         private static CloudTable _azureTableLog = null;
 
-        /// <summary>Extract the Configuration settings and turn on azure if they are valid</summary>
-        /// <param name="config"></param>
-        public static void ExtractConfig(ConfigurationModel config)
-        {
-            if (!string.IsNullOrWhiteSpace(config.AzureStorageAccountName) &&
-                !string.IsNullOrWhiteSpace(config.AzureStorageAccountKey)
-                )
-            {
-                /* save the values from the config file */
-
-                //Save the values for azure in the storage file manager
-                AzureConnectionString = string.Format("DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1}",
-                    config.AzureStorageAccountName.Trim(),
-                    config.AzureStorageAccountKey.Trim()
-                    );
-                AzureTableNameComputer = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
-                    ? "TimeTrackerComputer"
-                    : config.AzureStorageTableNameComputer;
-
-                AzureTableNameLog = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
-                    ? "TimeTrackerLog"
-                    : config.AzureStorageTableNameLog;
-
-                /* Test validity of azure storage tables */
-
-                //Extract the values and setup the connection objects
-                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureConnectionString);
-                CloudTableClient tableClient = storageAccount.CreateCloudTableClient();
-                _azureTableComputer = tableClient.GetTableReference(AzureTableNameComputer);
-                _azureTableLog = tableClient.GetTableReference(AzureTableNameLog);
-                //Test the table connection
-                try
-                {   //Test by getting a simple command
-                    _azureTableComputer.GetPermissions();
-                    _azureTableLog.GetPermissions();
-                    _useAzure = true;
-                }
-                catch (Exception ex)
-                {   //No connection or table does not exist
-                    _azureTableComputer = null;
-                    _azureTableLog = null;
-                    _useAzure = false;
-                }
-            }
-            else
-                _useAzure = false;            
-        }
-
-
         #endregion
 
         #region Methods
@@ -169,7 +120,10 @@ namespace TimeManager.Helpers
             {
                 if (_useAzure)
                 {
-
+                    foreach(string logEntry in logEntries)
+                    {
+                        AzureLogEntry entry = new AzureLogEntry(userLoginName, logEntry);
+                    }
                 }
                 else
                 {
@@ -187,6 +141,44 @@ namespace TimeManager.Helpers
                 //supress any log entry writing exception
             }
         }
+
+        public static void WriteComputer(string userLoginName)
+        {
+            try
+            {
+                InformationModel info = new InformationModel();
+                var temp = info.MachineInfo.BiosId;
+                var temp1 = info.OperatingSystemInfo.NetBiosName;
+
+                if (_useAzure)
+                {
+                    //Build up the computer entry
+                    AzureComputerEntry entry = new AzureComputerEntry(userLoginName, info.OperatingSystemInfo.NetBiosName);
+                    entry.ComputerInfo = JsonConvert.SerializeObject(info);
+                    // Create the TableOperation object that inserts/replaces the computer entity.
+                    TableOperation insertOperation = TableOperation.InsertOrReplace(entry);
+                    // Execute the insert/replace operation.
+                    _azureTableComputer.Execute(insertOperation);
+                }
+                else
+                {
+                    //Build up the computer entry
+
+                    //The template of the entry in the log file
+                    string entryTemplate = "{0} - ({1:yyyy-MM-dd HH:mm:ss}) - {2}";
+
+                    //Prepend the userLoginName to each log line
+                    logEntries = logEntries.Select(entry => string.Format(entryTemplate, userLoginName, DateTime.Now, entry)).ToList();
+                    //Append the log lines to the file
+                    File.AppendAllLines(GetPathAndFileName(), logEntries);
+                }
+            }
+            catch (Exception)
+            {
+                //supress any log entry writing exception
+            }
+        }
+
 
         /// <summary>Clear out the entire log file</summary>
         public static void Clear() { File.WriteAllText(GetPathAndFileName(), string.Empty); }
@@ -255,6 +247,55 @@ namespace TimeManager.Helpers
 
         #region Helper Methods
 
+        /// <summary>Extract the Configuration settings and turn on azure if they are valid</summary>
+        /// <param name="config"></param>
+        public static void ExtractConfig(ConfigurationModel config)
+        {
+            if (!string.IsNullOrWhiteSpace(config.AzureStorageAccountName) &&
+                !string.IsNullOrWhiteSpace(config.AzureStorageAccountKey)
+               )
+            {
+                /* save the values from the config file */
+
+                //Save the values for azure in the storage file manager
+                AzureConnectionString = string.Format("DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1}",
+                                                        config.AzureStorageAccountName.Trim(),
+                                                        config.AzureStorageAccountKey.Trim()
+                                                     );
+                AzureTableNameComputer = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
+                                         ? "TimeTrackerComputer"
+                                         : config.AzureStorageTableNameComputer;
+
+                AzureTableNameLog = string.IsNullOrWhiteSpace(config.AzureStorageTableNameComputer)
+                                    ? "TimeTrackerLog"
+                                    : config.AzureStorageTableNameLog;
+
+                /* Test validity of azure storage tables */
+
+                //Extract the values and setup the connection objects
+                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(AzureConnectionString);
+                CloudTableClient tableClient = storageAccount.CreateCloudTableClient();
+                _azureTableComputer = tableClient.GetTableReference(AzureTableNameComputer);
+                _azureTableLog = tableClient.GetTableReference(AzureTableNameLog);
+
+                //Test the table connection
+                try
+                {   //Test by getting a simple command
+                    _azureTableComputer.GetPermissions();
+                    _azureTableLog.GetPermissions();
+                    _useAzure = true;
+                }
+                catch (Exception)
+                {   //No connection or table does not exist
+                    _azureTableComputer = null;
+                    _azureTableLog = null;
+                    _useAzure = false;
+                }
+            }
+            else
+                _useAzure = false;            
+        }
+
         /// <summary>Get the current login user</summary>
         public static string GetLoginUserName()
         {
@@ -262,7 +303,7 @@ namespace TimeManager.Helpers
             {
                 return WindowsIdentity.GetCurrent().Name.ToString();
             }
-            catch (System.Security.SecurityException ex)
+            catch (System.Security.SecurityException)
             {
                 return "UnknownUserForSecurityException";
             }
@@ -330,8 +371,34 @@ namespace TimeManager.Helpers
         #endregion Helper Methods
     }
 
+    public class AzureComputerEntry : TableEntity
+    {
+        /// <summary>Constructor - Default</summary>
+        public AzureComputerEntry() { }
+        /// <summary>Constructor - computerKey, userLoginName initializers</summary>
+        /// <param name="computerKey">The netbios name of the computer</param>
+        /// <param name="userLoginName">the domain/username</param>
+        public AzureComputerEntry(string userLoginName, string computerKey)
+        {
+            base.PartitionKey = userLoginName;
+            base.RowKey = computerKey;
+        }
+
+        public string ComputerInfo { get; set; }
+
+    }
+
     public class AzureLogEntry : TableEntity
     {
-        //public AzureLogEntry(string userLoginName,)
+        /// <summary>Constructor - Default</summary>
+        public AzureLogEntry() { }
+        /// <summary>Constructor - userLoginName, logEntry initializers</summary>
+        /// <param name="userLoginName">the domain/username</param>
+        /// <param name="logEntry">the log entry to record</param>
+        public AzureLogEntry(string userLoginName, string logEntry)
+        {
+            base.PartitionKey = "";
+
+        }
     }
 }
