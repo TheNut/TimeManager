@@ -167,10 +167,8 @@ namespace TimeManager.Helpers
                     //The template of the entry in the log file
                     string entryTemplate = "{0} - ({1:yyyy-MM-dd HH:mm:ss}) - {2}";
 
-                    //Prepend the userLoginName to each log line
-                    logEntries = logEntries.Select(entry => string.Format(entryTemplate, userLoginName, DateTime.Now, entry)).ToList();
                     //Append the log lines to the file
-                    File.AppendAllLines(GetPathAndFileName(), logEntries);
+                    File.AppendAllText(GetPathAndFileName(), string.Format(entryTemplate, userLoginName, DateTime.Now, JsonConvert.SerializeObject(info)));
                 }
             }
             catch (Exception)
